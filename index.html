@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>わたしのニュース</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; background: #F3F5F9; color: #2F3B52; }
+  header { background: #93A7CC; color: #fff; padding: 14px 16px 12px; position: sticky; top: 0; z-index: 5; }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: .02em; }
+  header p { margin: 2px 0 0; font-size: 12px; opacity: .9; }
+  header .row { display: flex; align-items: center; justify-content: space-between; }
+  #refreshBtn { background: rgba(255,255,255,.25); border: none; color: #fff; font-size: 18px; width: 38px; height: 38px; border-radius: 50%; }
+  main { max-width: 640px; margin: 0 auto; padding: 12px 12px 40px; }
+  details.settings { background: #fff; border-radius: 12px; padding: 10px 14px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(70,88,122,.12); }
+  details.settings summary { font-weight: 700; color: #46587A; font-size: 15px; cursor: pointer; }
+  .addrow { display: flex; gap: 8px; margin: 10px 0; }
+  .addrow input { flex: 1; font-size: 16px; padding: 9px 10px; border: 1px solid #C4CFDF; border-radius: 8px; }
+  .addrow button { background: #6E8BB8; color: #fff; border: none; border-radius: 8px; padding: 0 16px; font-size: 15px; font-weight: 700; }
+  .kwlist { list-style: none; margin: 6px 0; padding: 0; }
+  .kwlist li { display: flex; justify-content: space-between; align-items: center; padding: 7px 2px; border-bottom: 1px solid #EDF1F7; font-size: 15px; }
+  .kwlist button { background: #EDF1F7; border: none; border-radius: 6px; padding: 4px 10px; font-size: 13px; color: #46587A; }
+  .examples { font-size: 13px; color: #7A879E; margin: 8px 0 2px; }
+  .examples button { background: #EFF3F9; border: 1px solid #C4CFDF; color: #46587A; border-radius: 999px; padding: 3px 10px; font-size: 13px; margin: 0 4px 6px 0; }
+  .note { font-size: 12px; color: #7A879E; line-height: 1.6; }
+  section.kw { background: #fff; border-radius: 12px; padding: 12px 14px 6px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(70,88,122,.12); }
+  section.kw h2 { margin: 0 0 6px; font-size: 16px; color: #46587A; }
+  section.kw h2 .cnt { font-size: 12px; color: #7A879E; font-weight: 400; }
+  ul.items { list-style: none; margin: 0; padding: 0; }
+  ul.items li { padding: 9px 0; border-top: 1px solid #EDF1F7; }
+  ul.items li:first-child { border-top: none; }
+  ul.items a { color: #2F3B52; text-decoration: none; font-size: 15px; line-height: 1.45; display: block; }
+  .meta { font-size: 12px; color: #7A879E; margin-top: 2px; }
+  .newdot { color: #D9534F; font-weight: 700; }
+  .empty, .fail { font-size: 14px; color: #7A879E; padding: 8px 0 12px; }
+  #updated { font-size: 12px; color: rgba(255,255,255,.85); }
+  footer { max-width: 640px; margin: 0 auto; padding: 0 12px 24px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <div>
+      <h1>📰 わたしのニュース</h1>
+      <p>登録したキーワードの新着を、開くたび自動で集めます</p>
+    </div>
+    <button id="refreshBtn" title="更新">⟳</button>
+  </div>
+  <div id="updated"></div>
+</header>
+<main>
+  <details class="settings" id="settingsBox">
+    <summary>⚙ キーワードの登録・変更</summary>
+    <div class="addrow">
+      <input id="kwInput" type="text" placeholder="例：好きなアーティスト名、新刊 発売">
+      <button id="kwAdd">追加</button>
+    </div>
+    <div class="examples">例（タップで追加）：
+      <button data-ex="新アルバム 発売">新アルバム 発売</button>
+      <button data-ex="新刊 発売">新刊 発売</button>
+      <button data-ex="大阪 イベント">大阪 イベント</button>
+    </div>
+    <ul class="kwlist" id="kwList"></ul>
+    <p class="note">キーワードはこの端末の中にだけ保存されます。新しい記事には <span class="newdot">●新着</span> が付きます（前回開いた日時との比較）。</p>
+  </details>
+  <div id="feeds"></div>
+  <div id="startGuide" style="display:none">
+    <section class="kw">
+      <h2>まだキーワードがありません</h2>
+      <p class="empty">上の「⚙ キーワードの登録・変更」から、追いかけたい言葉を入れてください。アーティスト名、作家名、気になるテーマなど、自由に入れられます。</p>
+    </section>
+  </div>
+</main>
+<footer>
+  <p class="note">ニュースはGoogleニュースから取得しています。記事の見出しをタップすると元の記事が開きます。</p>
+</footer>
+<script>
+(function(){
+  "use strict";
+  var LS_KW = "mynews_keywords_v1";
+  var LS_SEEN = "mynews_lastseen_v1";
+  var PER_KW = 5;
+  var GNEWS = "https://news.google.com/rss/search?hl=ja&gl=JP&ceid=JP:ja&q=";
+
+  function loadKeywords(){
+    try { var v = JSON.parse(localStorage.getItem(LS_KW) || "[]"); return Array.isArray(v) ? v : []; }
+    catch(e){ return []; }
+  }
+  function saveKeywords(kws){ localStorage.setItem(LS_KW, JSON.stringify(kws)); }
+  function lastSeen(){
+    var v = parseInt(localStorage.getItem(LS_SEEN) || "0", 10);
+    return isNaN(v) ? 0 : v;
+  }
+
+  function fetchWithTimeout(url, ms){
+    var ctl = new AbortController();
+    var t = setTimeout(function(){ ctl.abort(); }, ms);
+    return fetch(url, {signal: ctl.signal}).then(function(r){
+      clearTimeout(t);
+      if (!r.ok) throw new Error("http " + r.status);
+      return r.text();
+    }, function(e){ clearTimeout(t); throw e; });
+  }
+
+  function parseXmlItems(text){
+    var doc = new DOMParser().parseFromString(text, "text/xml");
+    var nodes = doc.querySelectorAll("item");
+    var out = [];
+    nodes.forEach(function(n){
+      var title = n.querySelector("title") ? n.querySelector("title").textContent : "";
+      var link = n.querySelector("link") ? n.querySelector("link").textContent : "";
+      var pub = n.querySelector("pubDate") ? n.querySelector("pubDate").textContent : "";
+      var src = n.querySelector("source") ? n.querySelector("source").textContent : "";
+      if (title && link) out.push({title: title, link: link, date: new Date(pub).getTime() || 0, source: src});
+    });
+    return out;
+  }
+
+  function fetchFeed(rss){
+    var j = "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(rss);
+    return fetchWithTimeout(j, 10000).then(function(text){
+      var data = JSON.parse(text);
+      if (!data.items || !data.items.length) throw new Error("empty");
+      return data.items.map(function(it){
+        return {title: it.title, link: it.link, date: new Date(it.pubDate).getTime() || 0, source: ""};
+      });
+    }).catch(function(){
+      var u1 = "https://api.allorigins.win/raw?url=" + encodeURIComponent(rss);
+      return fetchWithTimeout(u1, 10000).then(parseXmlItems);
+    }).catch(function(){
+      var u2 = "https://corsproxy.io/?url=" + encodeURIComponent(rss);
+      return fetchWithTimeout(u2, 10000).then(parseXmlItems);
+    });
+  }
+
+  function relTime(ts){
+    if (!ts) return "";
+    var diff = Date.now() - ts;
+    var h = Math.floor(diff / 3600000);
+    if (h < 1) return "1時間以内";
+    if (h < 24) return h + "時間前";
+    var d = Math.floor(h / 24);
+    if (d < 30) return d + "日前";
+    var dt = new Date(ts);
+    return (dt.getMonth() + 1) + "/" + dt.getDate();
+  }
+
+  function esc(s){
+    return String(s).replace(/[&<>"']/g, function(c){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+    });
+  }
+
+  function renderKwList(){
+    var kws = loadKeywords();
+    var ul = document.getElementById("kwList");
+    ul.innerHTML = kws.map(function(k, i){
+      return '<li><span>' + esc(k) + '</span><button data-del="' + i + '">削除</button></li>';
+    }).join("");
+    ul.querySelectorAll("button[data-del]").forEach(function(b){
+      b.addEventListener("click", function(){
+        var list = loadKeywords();
+        list.splice(parseInt(b.getAttribute("data-del"), 10), 1);
+        saveKeywords(list);
+        renderKwList();
+        loadAll();
+      });
+    });
+  }
+
+  function addKeyword(k){
+    k = (k || "").trim();
+    if (!k) return;
+    var kws = loadKeywords();
+    if (kws.indexOf(k) >= 0) return;
+    kws.push(k);
+    saveKeywords(kws);
+    renderKwList();
+    loadAll();
+  }
+
+  function loadAll(){
+    var kws = loadKeywords();
+    var feeds = document.getElementById("feeds");
+    var guide = document.getElementById("startGuide");
+    var seen = lastSeen();
+    if (!kws.length){
+      feeds.innerHTML = "";
+      guide.style.display = "block";
+      document.getElementById("settingsBox").open = true;
+      return;
+    }
+    guide.style.display = "none";
+    feeds.innerHTML = kws.map(function(k, i){
+      return '<section class="kw"><h2>' + esc(k) + '</h2><div class="empty" id="kw-body-' + i + '">読み込み中…</div></section>';
+    }).join("");
+    var done = 0;
+    kws.forEach(function(k, i){
+      var rss = GNEWS + encodeURIComponent(k);
+      fetchFeed(rss).then(function(items){
+        items.sort(function(a, b){ return b.date - a.date; });
+        items = items.slice(0, PER_KW);
+        var body = document.getElementById("kw-body-" + i);
+        if (!body) return;
+        if (!items.length){ body.textContent = "新着が見つかりませんでした"; return; }
+        var html = '<ul class="items">' + items.map(function(it){
+          var isNew = seen && it.date > seen;
+          return '<li><a href="' + esc(it.link) + '" target="_blank" rel="noopener">' +
+            (isNew ? '<span class="newdot">●新着 </span>' : '') + esc(it.title) + '</a>' +
+            '<div class="meta">' + esc(it.source) + (it.source ? ' ・ ' : '') + relTime(it.date) + '</div></li>';
+        }).join("") + '</ul>';
+        body.outerHTML = html;
+      }).catch(function(){
+        var body = document.getElementById("kw-body-" + i);
+        if (body) body.textContent = "読み込めませんでした（通信状態を確認してください）";
+      }).then(function(){
+        done++;
+        if (done === kws.length){
+          var now = new Date();
+          document.getElementById("updated").textContent = "最終更新 " + now.getHours() + ":" + ("0" + now.getMinutes()).slice(-2);
+          localStorage.setItem(LS_SEEN, String(Date.now()));
+        }
+      });
+    });
+  }
+
+  document.getElementById("kwAdd").addEventListener("click", function(){
+    var inp = document.getElementById("kwInput");
+    addKeyword(inp.value);
+    inp.value = "";
+  });
+  document.getElementById("kwInput").addEventListener("keydown", function(e){
+    if (e.key === "Enter"){ addKeyword(e.target.value); e.target.value = ""; }
+  });
+  document.querySelectorAll("button[data-ex]").forEach(function(b){
+    b.addEventListener("click", function(){ addKeyword(b.getAttribute("data-ex")); });
+  });
+  document.getElementById("refreshBtn").addEventListener("click", loadAll);
+
+  renderKwList();
+  loadAll();
+})();
+</script>
+</body>
+</html>
