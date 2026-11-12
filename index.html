@@ -25,6 +25,7 @@
   .kwlist { list-style: none; margin: 6px 0; padding: 0; }
   .kwlist li { display: flex; justify-content: space-between; align-items: center; padding: 7px 2px; border-bottom: 1px solid #EDF1F7; font-size: 15px; }
   .kwlist button { background: #EDF1F7; border: none; border-radius: 6px; padding: 4px 10px; font-size: 13px; color: #46587A; }
+  .kwbtns button { margin-left: 6px; }
   .examples { font-size: 13px; color: #7A879E; margin: 8px 0 2px; }
   .examples button { background: #EFF3F9; border: 1px solid #C4CFDF; color: #46587A; border-radius: 999px; padding: 3px 10px; font-size: 13px; margin: 0 4px 6px 0; }
   .note { font-size: 12px; color: #7A879E; line-height: 1.6; }
@@ -160,8 +161,16 @@
     var kws = loadKeywords();
     var ul = document.getElementById("kwList");
     ul.innerHTML = kws.map(function(k, i){
-      return '<li><span>' + esc(k) + '</span><button data-del="' + i + '">削除</button></li>';
+      var up = i > 0 ? '<button data-up="' + i + '">↑上へ</button>' : '';
+      var down = i < kws.length - 1 ? '<button data-down="' + i + '">↓下へ</button>' : '';
+      return '<li><span>' + esc(k) + '</span><span class="kwbtns">' + up + down + '<button data-del="' + i + '">削除</button></span></li>';
     }).join("");
+    ul.querySelectorAll("button[data-up]").forEach(function(b){
+      b.addEventListener("click", function(){ moveKeyword(parseInt(b.getAttribute("data-up"), 10), -1); });
+    });
+    ul.querySelectorAll("button[data-down]").forEach(function(b){
+      b.addEventListener("click", function(){ moveKeyword(parseInt(b.getAttribute("data-down"), 10), 1); });
+    });
     ul.querySelectorAll("button[data-del]").forEach(function(b){
       b.addEventListener("click", function(){
         var list = loadKeywords();
@@ -171,6 +180,16 @@
         loadAll();
       });
     });
+  }
+
+  function moveKeyword(i, dir){
+    var kws = loadKeywords();
+    var j = i + dir;
+    if (j < 0 || j >= kws.length) return;
+    var tmp = kws[i]; kws[i] = kws[j]; kws[j] = tmp;
+    saveKeywords(kws);
+    renderKwList();
+    loadAll();
   }
 
   function addKeyword(k){
