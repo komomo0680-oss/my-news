@@ -76,7 +76,7 @@
       <button data-ex="大阪 イベント">大阪 イベント</button>
     </div>
     <ul class="kwlist" id="kwList"></ul>
-    <p class="note">キーワードはこの端末の中にだけ保存されます。新しい記事には <span class="newdot">●新着</span> が付きます（前回開いた日時との比較）。<br>絞り込みのコツ：単語をスペースでつなぐと両方含む記事だけになります（例：美容液 新発売）。前に「-」を付けた単語は除外されます（例：猫 -犬）。</p>
+    <p class="note">キーワードはこの端末の中にだけ保存されます。新しい記事には <span class="newdot">●新着</span> が付きます（前回開いたときに無かった記事）。<br>絞り込みのコツ：単語をスペースでつなぐと両方含む記事だけになります（例：美容液 新発売）。前に「-」を付けた単語は除外されます（例：猫 -犬）。</p>
   </details>
   <details class="settings" id="savedBox">
     <summary>📚 保存した記事（<span id="savedCount">0</span>）</summary>
@@ -108,6 +108,7 @@
   var LS_KW = "mynews_keywords_v1";
   var LS_SEEN = "mynews_lastseen_v1";
   var LS_SAVED = "mynews_saved_v1";
+  var LS_LINKS = "mynews_seenlinks_v1";
   var currentItems = [];
   var PER_KW = 5;
   var GNEWS = "https://news.google.com/rss/search?hl=ja&gl=JP&ceid=JP:ja&q=";
@@ -121,6 +122,11 @@
     var v = parseInt(localStorage.getItem(LS_SEEN) || "0", 10);
     return isNaN(v) ? 0 : v;
   }
+  function loadSeenLinks(){
+    try { var v = JSON.parse(localStorage.getItem(LS_LINKS) || "[]"); return Array.isArray(v) ? v : []; }
+    catch(e){ return []; }
+  }
+  function storeSeenLinks(list){ try { localStorage.setItem(LS_LINKS, JSON.stringify(list)); } catch(e){} }
 
   function fetchWithTimeout(url, ms){
     var ctl = new AbortController();
@@ -388,13 +394,15 @@
     var kws = loadKeywords();
     var feeds = document.getElementById("feeds");
     var guide = document.getElementById("startGuide");
-    // 新着判定の基準は「前回アプリを開いた時刻」。同じ開いている間の更新では基準を動かさない
-    var base = sessionStorage.getItem("wb_base");
-    if (base === null){
-      base = String(lastSeen());
-      sessionStorage.setItem("wb_base", base);
+    // 新着判定は「前回開いたときに無かった記事」で行う（日時計算は経路ごとにずれて当てにならなかったため、記事リンクそのものを覚える方式）
+    var prevLinks = null;
+    try { prevLinks = JSON.parse(sessionStorage.getItem("wb_links") || "null"); } catch(e){ prevLinks = null; }
+    if (!prevLinks){
+      prevLinks = loadSeenLinks();
+      try { sessionStorage.setItem("wb_links", JSON.stringify(prevLinks)); } catch(e){}
     }
-    var seen = parseInt(base, 10);
+    var prevSet = {};
+    prevLinks.forEach(function(u){ prevSet[u] = 1; });
     if (!kws.length){
       feeds.innerHTML = "";
       guide.style.display = "block";
@@ -420,7 +428,7 @@
         if (!body) return;
         if (!items.length){ body.textContent = "新着が見つかりませんでした"; return; }
         var html = '<ul class="items" id="kw-list-' + i + '">' + items.map(function(it){
-          var isNew = seen && it.date > seen;
+          var isNew = !prevSet[it.link];
           var idx = currentItems.length;
           currentItems.push({title: it.title, link: it.link, source: it.source, date: it.date, kw: k});
           var saved = isSaved(it.link);
@@ -443,6 +451,7 @@
           var now = new Date();
           document.getElementById("updated").textContent = "最終更新 " + now.getHours() + ":" + ("0" + now.getMinutes()).slice(-2);
           localStorage.setItem(LS_SEEN, String(Date.now()));
+          storeSeenLinks(currentItems.map(function(x){ return x.link; }).slice(0, 100));
         }
       });
     });
