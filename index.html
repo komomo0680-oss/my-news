@@ -184,13 +184,38 @@
     if (text.length < 200 && doc.body) text = (doc.body.textContent || "").replace(/\s+/g, " ").trim();
     return text.slice(0, 8000);
   }
+  function resolvePublisherUrl(url){
+    try {
+      var m = url.match(/news\.google\.com\/rss\/articles\/([A-Za-z0-9_-]+)/);
+      if (!m) return url;
+      var bin = atob(m[1].replace(/-/g, "+").replace(/_/g, "/"));
+      var urls = bin.match(/https?:\/\/[^\s"'\\\x00-\x1f]+/g) || [];
+      for (var i = 0; i < urls.length; i++){
+        if (urls[i].indexOf("google.") < 0) return urls[i].replace(/[\x00-\x1f].*$/, "");
+      }
+      return url;
+    } catch(e){ return url; }
+  }
+  function cleanJinaText(t){
+    var marker = "Markdown Content:";
+    var pos = t.indexOf(marker);
+    if (pos >= 0) t = t.slice(pos + marker.length);
+    return t.replace(/\n{3,}/g, "\n\n").trim().slice(0, 8000);
+  }
   function fetchArticleText(url){
-    var u1 = "https://api.allorigins.win/raw?url=" + encodeURIComponent(url);
-    return fetchWithTimeout(u1, 15000).then(extractText).then(function(t){
+    var target = resolvePublisherUrl(url);
+    var jina = "https://r.jina.ai/" + target;
+    return fetchWithTimeout(jina, 25000).then(cleanJinaText).then(function(t){
       if (!t || t.length < 200) throw new Error("short");
       return t;
     }).catch(function(){
-      var u2 = "https://corsproxy.io/?url=" + encodeURIComponent(url);
+      var u1 = "https://api.allorigins.win/raw?url=" + encodeURIComponent(target);
+      return fetchWithTimeout(u1, 15000).then(extractText);
+    }).then(function(t){
+      if (!t || t.length < 200) throw new Error("short");
+      return t;
+    }).catch(function(){
+      var u2 = "https://corsproxy.io/?url=" + encodeURIComponent(target);
       return fetchWithTimeout(u2, 15000).then(extractText).then(function(t){
         if (!t || t.length < 200) throw new Error("short");
         return t;
@@ -226,6 +251,28 @@
       renderSaved();
     });
   }
+  function retryCapture(i){
+    var list = loadSaved();
+    var rec = list[i];
+    if (!rec) return;
+    fetchArticleText(rec.link).then(function(text){
+      rec.text = text; rec.noText = false;
+    }).catch(function(){
+      rec.noText = true;
+    }).then(function(){
+      var l = loadSaved();
+      var pos = -1;
+      l.forEach(function(s, j){ if (s.link === rec.link) pos = j; });
+      if (pos >= 0){
+        l[pos] = rec;
+        try { storeSaved(l); } catch(e){
+          rec.text = null; rec.noText = true;
+          try { storeSaved(l); } catch(e2){}
+        }
+      }
+      renderSaved();
+    });
+  }
   function openReader(i){
     var s = loadSaved()[i];
     if (!s || !s.text) return;
@@ -245,13 +292,19 @@
       return;
     }
     ul.innerHTML = list.map(function(s, i){
-      var readBtn = s.text ? ' <button class="savebtn" data-read="' + i + '">読む</button>' : (s.noText ? ' <span class="note">（本文は取れませんでした）</span>' : '');
+      var readBtn = s.text ? ' <button class="savebtn" data-read="' + i + '">読む</button>' : (s.noText ? ' <span class="note">（本文は取れませんでした）</span> <button class="savebtn" data-retry="' + i + '">取り直す</button>' : '');
       return '<li><span><a href="' + esc(s.link) + '" target="_blank" rel="noopener" style="color:#2F3B52;text-decoration:none;">' + esc(s.title) + '</a>' +
         '<div class="meta">' + esc(s.kw || "") + (s.kw ? ' ・ ' : '') + esc(s.source || "") + (s.source ? ' ・ ' : '') + relTime(s.date) + readBtn + '</div></span>' +
         '<button data-saved-del="' + i + '">削除</button></li>';
     }).join("");
     ul.querySelectorAll("button[data-read]").forEach(function(b){
       b.addEventListener("click", function(){ openReader(parseInt(b.getAttribute("data-read"), 10)); });
+    });
+    ul.querySelectorAll("button[data-retry]").forEach(function(b){
+      b.addEventListener("click", function(){
+        b.textContent = "取り込み中…"; b.disabled = true;
+        retryCapture(parseInt(b.getAttribute("data-retry"), 10));
+      });
     });
     ul.querySelectorAll("button[data-saved-del]").forEach(function(b){
       b.addEventListener("click", function(){
