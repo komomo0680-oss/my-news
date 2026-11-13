@@ -76,7 +76,7 @@
       <button data-ex="大阪 イベント">大阪 イベント</button>
     </div>
     <ul class="kwlist" id="kwList"></ul>
-    <p class="note">キーワードはこの端末の中にだけ保存されます。新しい記事には <span class="newdot">●新着</span> が付きます（前回開いた日時との比較）。</p>
+    <p class="note">キーワードはこの端末の中にだけ保存されます。新しい記事には <span class="newdot">●新着</span> が付きます（前回開いた日時との比較）。<br>絞り込みのコツ：単語をスペースでつなぐと両方含む記事だけになります（例：美容液 新発売）。前に「-」を付けた単語は除外されます（例：猫 -犬）。</p>
   </details>
   <details class="settings" id="savedBox">
     <summary>📚 保存した記事（<span id="savedCount">0</span>）</summary>
@@ -385,7 +385,13 @@
     var kws = loadKeywords();
     var feeds = document.getElementById("feeds");
     var guide = document.getElementById("startGuide");
-    var seen = lastSeen();
+    // 新着判定の基準は「前回アプリを開いた時刻」。同じ開いている間の更新では基準を動かさない
+    var base = sessionStorage.getItem("wb_base");
+    if (base === null){
+      base = String(lastSeen());
+      sessionStorage.setItem("wb_base", base);
+    }
+    var seen = parseInt(base, 10);
     if (!kws.length){
       feeds.innerHTML = "";
       guide.style.display = "block";
