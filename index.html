@@ -41,6 +41,12 @@
   .newdot { color: #D9534F; font-weight: 700; }
   .savebtn { background: #EFF3F9; border: 1px solid #C4CFDF; color: #46587A; border-radius: 999px; padding: 2px 12px; font-size: 12px; margin-left: 6px; }
   .savebtn:disabled { opacity: .55; }
+  #reader { display: none; background: #fff; border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(70,88,122,.12); }
+  .reader-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  #readerTitle { font-weight: 700; font-size: 16px; color: #46587A; line-height: 1.5; }
+  #readerClose { background: #6E8BB8; color: #fff; border: none; border-radius: 8px; padding: 6px 14px; font-size: 14px; white-space: nowrap; }
+  #readerBody { font-size: 15px; line-height: 1.9; margin-top: 8px; }
+  #readerBody p { margin: 0 0 12px; }
   .empty, .fail { font-size: 14px; color: #7A879E; padding: 8px 0 12px; }
   #updated { font-size: 12px; color: rgba(255,255,255,.85); }
   footer { max-width: 640px; margin: 0 auto; padding: 0 12px 24px; }
@@ -75,8 +81,16 @@
   <details class="settings" id="savedBox">
     <summary>📚 保存した記事（<span id="savedCount">0</span>）</summary>
     <ul class="kwlist" id="savedList"></ul>
-    <p class="note">保存した記事はこの端末の中にだけ残ります。タイトルをタップすると元の記事が開きます。</p>
+    <p class="note">保存した記事はこの端末の中にだけ残ります。本文が取り込めた記事は「読む」ボタンでアプリ内ですぐ読めます。本文は自動で取り込むため、取れないサイトもあります。</p>
   </details>
+  <div id="reader">
+    <div class="reader-head">
+      <span id="readerTitle"></span>
+      <button id="readerClose">閉じる</button>
+    </div>
+    <div class="meta" id="readerMeta"></div>
+    <div id="readerBody"></div>
+  </div>
   <div id="feeds"></div>
   <div id="startGuide" style="display:none">
     <section class="kw">
@@ -157,15 +171,70 @@
   function isSaved(link){
     return loadSaved().some(function(s){ return s.link === link; });
   }
+  function extractText(html){
+    var doc = new DOMParser().parseFromString(html, "text/html");
+    doc.querySelectorAll("script,style,noscript,iframe,nav,footer,header,aside,form,button,svg").forEach(function(n){ n.remove(); });
+    var root = doc.querySelector("article") || doc.body;
+    var out = [];
+    if (root) root.querySelectorAll("p").forEach(function(p){
+      var t = (p.textContent || "").trim();
+      if (t.length >= 30) out.push(t);
+    });
+    var text = out.join("\n\n");
+    if (text.length < 200 && doc.body) text = (doc.body.textContent || "").replace(/\s+/g, " ").trim();
+    return text.slice(0, 8000);
+  }
+  function fetchArticleText(url){
+    var u1 = "https://api.allorigins.win/raw?url=" + encodeURIComponent(url);
+    return fetchWithTimeout(u1, 15000).then(extractText).then(function(t){
+      if (!t || t.length < 200) throw new Error("short");
+      return t;
+    }).catch(function(){
+      var u2 = "https://corsproxy.io/?url=" + encodeURIComponent(url);
+      return fetchWithTimeout(u2, 15000).then(extractText).then(function(t){
+        if (!t || t.length < 200) throw new Error("short");
+        return t;
+      });
+    });
+  }
   function saveArticle(idx, btn){
     var it = currentItems[idx];
     if (!it) return;
     var list = loadSaved();
     if (list.some(function(s){ return s.link === it.link; })) return;
-    list.unshift({title: it.title, link: it.link, source: it.source, date: it.date, kw: it.kw, savedAt: Date.now()});
-    storeSaved(list);
-    if (btn){ btn.textContent = "保存済み"; btn.disabled = true; }
+    var rec = {title: it.title, link: it.link, source: it.source, date: it.date, kw: it.kw, savedAt: Date.now(), text: null, noText: false};
+    list.unshift(rec);
+    try { storeSaved(list); } catch(e){ return; }
+    if (btn){ btn.textContent = "取り込み中…"; btn.disabled = true; }
     renderSaved();
+    fetchArticleText(it.link).then(function(text){
+      rec.text = text;
+    }).catch(function(){
+      rec.noText = true;
+    }).then(function(){
+      var l = loadSaved();
+      var pos = -1;
+      l.forEach(function(s, i){ if (s.link === rec.link) pos = i; });
+      if (pos >= 0){
+        l[pos] = rec;
+        try { storeSaved(l); } catch(e){
+          rec.text = null; rec.noText = true;
+          try { storeSaved(l); } catch(e2){}
+        }
+      }
+      if (btn) btn.textContent = "保存済み";
+      renderSaved();
+    });
+  }
+  function openReader(i){
+    var s = loadSaved()[i];
+    if (!s || !s.text) return;
+    document.getElementById("readerTitle").textContent = s.title;
+    document.getElementById("readerMeta").textContent = (s.source || "") + (s.source ? " ・ " : "") + relTime(s.date) + " ・ 元の記事はタイトル下の保存リストから開けます";
+    document.getElementById("readerBody").innerHTML = s.text.split("\n\n").map(function(p){ return "<p>" + esc(p) + "</p>"; }).join("");
+    var r = document.getElementById("reader");
+    r.style.display = "block";
+    r.scrollIntoView({behavior: "smooth"});
   }
   function renderSaved(){
     var list = loadSaved();
@@ -176,10 +245,14 @@
       return;
     }
     ul.innerHTML = list.map(function(s, i){
+      var readBtn = s.text ? ' <button class="savebtn" data-read="' + i + '">読む</button>' : (s.noText ? ' <span class="note">（本文は取れませんでした）</span>' : '');
       return '<li><span><a href="' + esc(s.link) + '" target="_blank" rel="noopener" style="color:#2F3B52;text-decoration:none;">' + esc(s.title) + '</a>' +
-        '<div class="meta">' + esc(s.kw || "") + (s.kw ? ' ・ ' : '') + esc(s.source || "") + (s.source ? ' ・ ' : '') + relTime(s.date) + '</div></span>' +
+        '<div class="meta">' + esc(s.kw || "") + (s.kw ? ' ・ ' : '') + esc(s.source || "") + (s.source ? ' ・ ' : '') + relTime(s.date) + readBtn + '</div></span>' +
         '<button data-saved-del="' + i + '">削除</button></li>';
     }).join("");
+    ul.querySelectorAll("button[data-read]").forEach(function(b){
+      b.addEventListener("click", function(){ openReader(parseInt(b.getAttribute("data-read"), 10)); });
+    });
     ul.querySelectorAll("button[data-saved-del]").forEach(function(b){
       b.addEventListener("click", function(){
         var l = loadSaved();
@@ -321,6 +394,9 @@
     b.addEventListener("click", function(){ addKeyword(b.getAttribute("data-ex")); });
   });
   document.getElementById("refreshBtn").addEventListener("click", loadAll);
+  document.getElementById("readerClose").addEventListener("click", function(){
+    document.getElementById("reader").style.display = "none";
+  });
 
   renderKwList();
   renderSaved();
