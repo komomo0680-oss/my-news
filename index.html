@@ -152,7 +152,10 @@
       var data = JSON.parse(text);
       if (!data.items || !data.items.length) throw new Error("empty");
       return data.items.map(function(it){
-        return {title: it.title, link: it.link, date: new Date(it.pubDate).getTime() || 0, source: ""};
+        // rss2json の pubDate は UTC なのにタイムゾーン表記がないため、そのまま読むと9時間ずれる
+        var ds = String(it.pubDate || "").replace(" ", "T");
+        if (ds && !/[Z+]/.test(ds)) ds += "Z";
+        return {title: it.title, link: it.link, date: new Date(ds).getTime() || 0, source: ""};
       });
     }).catch(function(){
       var u1 = "https://api.allorigins.win/raw?url=" + encodeURIComponent(rss);
@@ -405,8 +408,12 @@
     }).join("");
     var done = 0;
     kws.forEach(function(k, i){
-      var rss = GNEWS + encodeURIComponent(k);
+      // まず「直近7日」だけに絞って取りにいく（関連順だと古い記事が混ざるため）。0件なら通常検索に落とす
+      var rss = GNEWS + encodeURIComponent(k + " when:7d");
       fetchFeed(rss).then(function(items){
+        if (!items.length) return fetchFeed(GNEWS + encodeURIComponent(k));
+        return items;
+      }).then(function(items){
         items.sort(function(a, b){ return b.date - a.date; });
         items = items.slice(0, PER_KW);
         var body = document.getElementById("kw-body-" + i);
