@@ -39,6 +39,8 @@
   ul.items a { color: #2F3B52; text-decoration: none; font-size: 15px; line-height: 1.45; display: block; }
   .meta { font-size: 12px; color: #7A879E; margin-top: 2px; }
   .newdot { color: #D9534F; font-weight: 700; }
+  .savebtn { background: #EFF3F9; border: 1px solid #C4CFDF; color: #46587A; border-radius: 999px; padding: 2px 12px; font-size: 12px; margin-left: 6px; }
+  .savebtn:disabled { opacity: .55; }
   .empty, .fail { font-size: 14px; color: #7A879E; padding: 8px 0 12px; }
   #updated { font-size: 12px; color: rgba(255,255,255,.85); }
   footer { max-width: 640px; margin: 0 auto; padding: 0 12px 24px; }
@@ -70,6 +72,11 @@
     <ul class="kwlist" id="kwList"></ul>
     <p class="note">キーワードはこの端末の中にだけ保存されます。新しい記事には <span class="newdot">●新着</span> が付きます（前回開いた日時との比較）。</p>
   </details>
+  <details class="settings" id="savedBox">
+    <summary>📚 保存した記事（<span id="savedCount">0</span>）</summary>
+    <ul class="kwlist" id="savedList"></ul>
+    <p class="note">保存した記事はこの端末の中にだけ残ります。タイトルをタップすると元の記事が開きます。</p>
+  </details>
   <div id="feeds"></div>
   <div id="startGuide" style="display:none">
     <section class="kw">
@@ -86,6 +93,8 @@
   "use strict";
   var LS_KW = "mynews_keywords_v1";
   var LS_SEEN = "mynews_lastseen_v1";
+  var LS_SAVED = "mynews_saved_v1";
+  var currentItems = [];
   var PER_KW = 5;
   var GNEWS = "https://news.google.com/rss/search?hl=ja&gl=JP&ceid=JP:ja&q=";
 
@@ -137,6 +146,48 @@
     }).catch(function(){
       var u2 = "https://corsproxy.io/?url=" + encodeURIComponent(rss);
       return fetchWithTimeout(u2, 10000).then(parseXmlItems);
+    });
+  }
+
+  function loadSaved(){
+    try { var v = JSON.parse(localStorage.getItem(LS_SAVED) || "[]"); return Array.isArray(v) ? v : []; }
+    catch(e){ return []; }
+  }
+  function storeSaved(list){ localStorage.setItem(LS_SAVED, JSON.stringify(list)); }
+  function isSaved(link){
+    return loadSaved().some(function(s){ return s.link === link; });
+  }
+  function saveArticle(idx, btn){
+    var it = currentItems[idx];
+    if (!it) return;
+    var list = loadSaved();
+    if (list.some(function(s){ return s.link === it.link; })) return;
+    list.unshift({title: it.title, link: it.link, source: it.source, date: it.date, kw: it.kw, savedAt: Date.now()});
+    storeSaved(list);
+    if (btn){ btn.textContent = "保存済み"; btn.disabled = true; }
+    renderSaved();
+  }
+  function renderSaved(){
+    var list = loadSaved();
+    document.getElementById("savedCount").textContent = list.length;
+    var ul = document.getElementById("savedList");
+    if (!list.length){
+      ul.innerHTML = '<li><span class="note">まだありません。記事の「保存」ボタンで追加できます。</span></li>';
+      return;
+    }
+    ul.innerHTML = list.map(function(s, i){
+      return '<li><span><a href="' + esc(s.link) + '" target="_blank" rel="noopener" style="color:#2F3B52;text-decoration:none;">' + esc(s.title) + '</a>' +
+        '<div class="meta">' + esc(s.kw || "") + (s.kw ? ' ・ ' : '') + esc(s.source || "") + (s.source ? ' ・ ' : '') + relTime(s.date) + '</div></span>' +
+        '<button data-saved-del="' + i + '">削除</button></li>';
+    }).join("");
+    ul.querySelectorAll("button[data-saved-del]").forEach(function(b){
+      b.addEventListener("click", function(){
+        var l = loadSaved();
+        l.splice(parseInt(b.getAttribute("data-saved-del"), 10), 1);
+        storeSaved(l);
+        renderSaved();
+        loadAll();
+      });
     });
   }
 
@@ -216,6 +267,7 @@
       return;
     }
     guide.style.display = "none";
+    currentItems = [];
     feeds.innerHTML = kws.map(function(k, i){
       return '<section class="kw"><h2>' + esc(k) + '</h2><div class="empty" id="kw-body-' + i + '">読み込み中…</div></section>';
     }).join("");
@@ -228,13 +280,21 @@
         var body = document.getElementById("kw-body-" + i);
         if (!body) return;
         if (!items.length){ body.textContent = "新着が見つかりませんでした"; return; }
-        var html = '<ul class="items">' + items.map(function(it){
+        var html = '<ul class="items" id="kw-list-' + i + '">' + items.map(function(it){
           var isNew = seen && it.date > seen;
+          var idx = currentItems.length;
+          currentItems.push({title: it.title, link: it.link, source: it.source, date: it.date, kw: k});
+          var saved = isSaved(it.link);
           return '<li><a href="' + esc(it.link) + '" target="_blank" rel="noopener">' +
             (isNew ? '<span class="newdot">●新着 </span>' : '') + esc(it.title) + '</a>' +
-            '<div class="meta">' + esc(it.source) + (it.source ? ' ・ ' : '') + relTime(it.date) + '</div></li>';
+            '<div class="meta">' + esc(it.source) + (it.source ? ' ・ ' : '') + relTime(it.date) +
+            ' <button class="savebtn" data-save="' + idx + '"' + (saved ? ' disabled' : '') + '>' + (saved ? '保存済み' : '保存') + '</button></div></li>';
         }).join("") + '</ul>';
         body.outerHTML = html;
+        var listEl = document.getElementById("kw-list-" + i);
+        if (listEl) listEl.querySelectorAll("button[data-save]").forEach(function(b){
+          b.addEventListener("click", function(){ saveArticle(parseInt(b.getAttribute("data-save"), 10), b); });
+        });
       }).catch(function(){
         var body = document.getElementById("kw-body-" + i);
         if (body) body.textContent = "読み込めませんでした（通信状態を確認してください）";
@@ -263,6 +323,7 @@
   document.getElementById("refreshBtn").addEventListener("click", loadAll);
 
   renderKwList();
+  renderSaved();
   loadAll();
 })();
 </script>
