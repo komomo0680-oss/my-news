@@ -76,7 +76,7 @@
       <button data-ex="大阪 イベント">大阪 イベント</button>
     </div>
     <ul class="kwlist" id="kwList"></ul>
-    <p class="note">キーワードはこの端末の中にだけ保存されます。新しい記事には <span class="newdot">●新着</span> が付きます（前回開いたときに無かった記事）。<br>絞り込みのコツ：単語をスペースでつなぐと両方含む記事だけになります（例：美容液 新発売）。前に「-」を付けた単語は除外されます（例：猫 -犬）。</p>
+    <p class="note">キーワードはこの端末の中にだけ保存されます。新しい記事には <span class="newdot">●新着</span> が付きます（その日、最初に開いたときに無かった記事。その日はずっと付いたままです）。<br>絞り込みのコツ：単語をスペースでつなぐと両方含む記事だけになります（例：美容液 新発売）。前に「-」を付けた単語は除外されます（例：猫 -犬）。</p>
   </details>
   <details class="settings" id="savedBox">
     <summary>📚 保存した記事（<span id="savedCount">0</span>）</summary>
@@ -109,6 +109,7 @@
   var LS_SEEN = "mynews_lastseen_v1";
   var LS_SAVED = "mynews_saved_v1";
   var LS_LINKS = "mynews_seenlinks_v1";
+  var LS_BASE = "mynews_baseline_v1";
   var currentItems = [];
   var isLoading = false;
   var lastLoadStarted = 0;
@@ -130,6 +131,21 @@
     catch(e){ return []; }
   }
   function storeSeenLinks(list){ try { localStorage.setItem(LS_LINKS, JSON.stringify(list)); } catch(e){} }
+  function todayStr(){
+    var n = new Date();
+    return n.getFullYear() + "-" + ("0" + (n.getMonth() + 1)).slice(-2) + "-" + ("0" + n.getDate()).slice(-2);
+  }
+  function loadBaselineLinks(){
+    // 新着判定の基準は「その日の最初に開いた時点の記事一覧」。日付が変わるまで基準を固定するので、
+    // 途中で閉じて開き直しても、その日の●新着は消えない
+    var base = null;
+    try { base = JSON.parse(localStorage.getItem(LS_BASE) || "null"); } catch(e){ base = null; }
+    if (!base || base.day !== todayStr() || !Array.isArray(base.links)){
+      base = {day: todayStr(), links: loadSeenLinks()};
+      try { localStorage.setItem(LS_BASE, JSON.stringify(base)); } catch(e){}
+    }
+    return base.links;
+  }
 
   function fetchWithTimeout(url, ms){
     var ctl = new AbortController();
@@ -400,13 +416,8 @@
     var kws = loadKeywords();
     var feeds = document.getElementById("feeds");
     var guide = document.getElementById("startGuide");
-    // 新着判定は「前回開いたときに無かった記事」で行う（日時計算は経路ごとにずれて当てにならなかったため、記事リンクそのものを覚える方式）
-    var prevLinks = null;
-    try { prevLinks = JSON.parse(sessionStorage.getItem("wb_links") || "null"); } catch(e){ prevLinks = null; }
-    if (!prevLinks){
-      prevLinks = loadSeenLinks();
-      try { sessionStorage.setItem("wb_links", JSON.stringify(prevLinks)); } catch(e){}
-    }
+    // 新着判定は「その日の最初に開いたときに無かった記事」で行う（記事リンクそのものを覚える方式。基準は日付が変わるまで固定）
+    var prevLinks = loadBaselineLinks();
     var prevSet = {};
     prevLinks.forEach(function(u){ prevSet[u] = 1; });
     if (!kws.length){
