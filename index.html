@@ -496,6 +496,10 @@
   document.addEventListener("visibilitychange", reloadIfStale);
   window.addEventListener("pageshow", reloadIfStale);
   window.addEventListener("focus", reloadIfStale);
+  window.addEventListener("resume", reloadIfStale);
+  // 「戻ってきた」合図が届かない開き方・機種でも、開いている間に30秒ごとに確認して、
+  // 前回の取得から3分以上たっていれば自動で取り直す（合図頼みにしないための保険）
+  setInterval(reloadIfStale, 30 * 1000);
   document.getElementById("refreshBtn").addEventListener("click", loadAll);
   document.getElementById("readerClose").addEventListener("click", function(){
     document.getElementById("reader").style.display = "none";
