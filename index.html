@@ -137,7 +137,9 @@
   }
   function loadBaselineLinks(){
     // 新着判定の基準は「その日の最初に開いた時点の記事一覧」。日付が変わるまで基準を固定するので、
-    // 途中で閉じて開き直しても、その日の●新着は消えない
+    // 途中で閉じて開き直しても、その日の●新着は消えない。
+    // 覚えるのは記事リンクではなく見出し（タイトル）：Googleニュースのリンクは取得経路
+    // （rss2json／生XML）ごとに別文字列になるため、リンクで比べると同じ記事に何度も●新着が付く
     var base = null;
     try { base = JSON.parse(localStorage.getItem(LS_BASE) || "null"); } catch(e){ base = null; }
     if (!base || base.day !== todayStr() || !Array.isArray(base.links)){
@@ -416,10 +418,12 @@
     var kws = loadKeywords();
     var feeds = document.getElementById("feeds");
     var guide = document.getElementById("startGuide");
-    // 新着判定は「その日の最初に開いたときに無かった記事」で行う（記事リンクそのものを覚える方式。基準は日付が変わるまで固定）
+    // 新着判定は「その日の最初に開いたときに無かった記事」で行う（見出しを覚える方式。基準は日付が変わるまで固定）
     var prevLinks = loadBaselineLinks();
     var prevSet = {};
     prevLinks.forEach(function(u){ prevSet[u] = 1; });
+    // 旧版のデータ（リンク）が残っている最初の1回だけは新着を付けず、今回の記事で基準を作り直す
+    var legacyKeys = prevLinks.some(function(u){ return /^https?:\/\//.test(u); });
     if (!kws.length){
       feeds.innerHTML = "";
       guide.style.display = "block";
@@ -442,11 +446,16 @@
       }).then(function(items){
         items.sort(function(a, b){ return b.date - a.date; });
         items = items.slice(0, PER_KW);
+        // 表示できた記事は、その場で「見た記事（見出し）」に記録する。
+        // 途中で閉じても記録が残り、翌日の基準が欠けないようにするため
+        var seenNow = loadSeenLinks();
+        items.forEach(function(it){ if (seenNow.indexOf(it.title) < 0) seenNow.push(it.title); });
+        storeSeenLinks(seenNow.slice(-300));
         var body = document.getElementById("kw-body-" + i);
         if (!body) return;
         if (!items.length){ body.textContent = "新着が見つかりませんでした"; return; }
         var html = '<ul class="items" id="kw-list-' + i + '">' + items.map(function(it){
-          var isNew = !prevSet[it.link];
+          var isNew = !legacyKeys && !prevSet[it.title];
           var idx = currentItems.length;
           currentItems.push({title: it.title, link: it.link, source: it.source, date: it.date, kw: k});
           var saved = isSaved(it.link);
@@ -469,7 +478,11 @@
           var now = new Date();
           document.getElementById("updated").textContent = "最終更新 " + now.getHours() + ":" + ("0" + now.getMinutes()).slice(-2);
           localStorage.setItem(LS_SEEN, String(Date.now()));
-          storeSeenLinks(currentItems.map(function(x){ return x.link; }).slice(0, 100));
+          storeSeenLinks(currentItems.map(function(x){ return x.title; }).slice(0, 300));
+          if (legacyKeys){
+            // 旧版からの移行：今日の基準を見出し方式で作り直す（この後の読み込みから通常判定になる）
+            try { localStorage.setItem(LS_BASE, JSON.stringify({day: todayStr(), links: currentItems.map(function(x){ return x.title; }).slice(0, 300)})); } catch(e){}
+          }
           isLoading = false;
         }
       });
