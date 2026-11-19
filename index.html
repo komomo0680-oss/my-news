@@ -173,7 +173,21 @@
     return out;
   }
 
-  function fetchFeed(rss){
+  function newestTime(items){
+    var m = 0;
+    items.forEach(function(it){ if (it.date > m) m = it.date; });
+    return m;
+  }
+
+  function fetchViaRaw(rss){
+    var u = "https://api.allorigins.win/raw?url=" + encodeURIComponent(rss);
+    return fetchWithTimeout(u, 12000).then(parseXmlItems).then(function(items){
+      if (!items.length) throw new Error("empty");
+      return items;
+    });
+  }
+
+  function fetchViaRss2json(rss){
     var j = "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(rss);
     return fetchWithTimeout(j, 10000).then(function(text){
       var data = JSON.parse(text);
@@ -184,12 +198,26 @@
         if (ds && !/[Z+]/.test(ds)) ds += "Z";
         return {title: it.title, link: it.link, date: new Date(ds).getTime() || 0, source: ""};
       });
-    }).catch(function(){
-      var u1 = "https://api.allorigins.win/raw?url=" + encodeURIComponent(rss);
-      return fetchWithTimeout(u1, 10000).then(parseXmlItems);
-    }).catch(function(){
-      var u2 = "https://corsproxy.io/?url=" + encodeURIComponent(rss);
-      return fetchWithTimeout(u2, 10000).then(parseXmlItems);
+    });
+  }
+
+  function fetchFeed(rss){
+    // 経路は「生フィード（新しい・全件）」→「rss2json」の順に試し、より新しい一覧を採用する。
+    // rss2json は無料枠のキャッシュが数日古いまま返ることがある（2026-11-19に確認：最新が11/16で停止）。
+    // 先に使うと一覧が止まって見えるため、鮮度（最新記事が48時間以内）も見て次の経路に進む。
+    // corsproxy.io は API キー必須になったため外した。
+    var FRESH_MS = 48 * 60 * 60 * 1000;
+    var best = null;
+    function consider(items){
+      if (items && items.length && (!best || newestTime(items) > newestTime(best))) best = items;
+      return !!best && (Date.now() - newestTime(best) < FRESH_MS);
+    }
+    return fetchViaRaw(rss).then(consider, function(){ return false; }).then(function(fresh){
+      if (fresh) return best;
+      return fetchViaRss2json(rss).then(consider, function(){}).then(function(){
+        if (!best) throw new Error("all routes failed");
+        return best;
+      });
     });
   }
 
