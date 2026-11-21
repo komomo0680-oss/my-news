@@ -116,6 +116,16 @@
   var AUTO_RELOAD_MS = 3 * 60 * 1000;
   var PER_KW = 5;
   var GNEWS = "https://news.google.com/rss/search?hl=ja&gl=JP&ceid=JP:ja&q=";
+  // 自前中継（Cloudflare Worker）。Googleニュースは中継経由では取れない（503でブロックされる）ため、Bing専用に使う。
+  var RELAY = "https://mynews-relay.komomo0680.workers.dev/";
+  var BING_NEWS = "https://www.bing.com/news/search?format=RSS&mkt=ja-JP&q=";
+  // Bingの方が新しいキーワードだけ、Bingから取る（2026-11-19実測）。判定は空白を除いたキーワードに言葉が含まれるかで見る。
+  // ここに無いキーワードは今まで通りGoogleから取る。
+  var BING_KEYS = ["化粧品", "大阪イルミネーション", "お出かけ", "ダイエット", "投信"];
+  function routeIsBing(k){
+    var flat = String(k).replace(/\s+/g, "");
+    return BING_KEYS.some(function(b){ return flat.indexOf(b) >= 0; });
+  }
 
   function loadKeywords(){
     try { var v = JSON.parse(localStorage.getItem(LS_KW) || "[]"); return Array.isArray(v) ? v : []; }
@@ -219,6 +229,31 @@
         return best;
       });
     });
+  }
+
+  function fetchViaBing(k){
+    var target = BING_NEWS + encodeURIComponent(k);
+    var u = RELAY + "?url=" + encodeURIComponent(target) + "&k=komomo-relay";
+    return fetchWithTimeout(u, 12000).then(parseXmlItems).then(function(items){
+      if (!items.length) throw new Error("empty");
+      return items;
+    });
+  }
+
+  function fetchKeyword(k){
+    // Bing担当のキーワードは先にBing（自前中継経由）を試し、最新記事が48時間以内ならそれを使う。
+    // 取れない・古い・0件の場合は今まで通りのGoogle経由に切り替えるので、表示が止まることはない。
+    function googleChain(){
+      return fetchFeed(GNEWS + encodeURIComponent(k + " when:7d")).then(function(items){
+        if (!items.length) return fetchFeed(GNEWS + encodeURIComponent(k));
+        return items;
+      });
+    }
+    if (!routeIsBing(k)) return googleChain();
+    return fetchViaBing(k).then(function(items){
+      if (Date.now() - newestTime(items) < 48 * 60 * 60 * 1000) return items;
+      return googleChain();
+    }, function(){ return googleChain(); });
   }
 
   function loadSaved(){
@@ -466,12 +501,9 @@
     }).join("");
     var done = 0;
     kws.forEach(function(k, i){
-      // まず「直近7日」だけに絞って取りにいく（関連順だと古い記事が混ざるため）。0件なら通常検索に落とす
-      var rss = GNEWS + encodeURIComponent(k + " when:7d");
-      fetchFeed(rss).then(function(items){
-        if (!items.length) return fetchFeed(GNEWS + encodeURIComponent(k));
-        return items;
-      }).then(function(items){
+      // 取得元はキーワードごとに選ぶ（Bing担当は fetchKeyword の中でBing→ダメならGoogleに切り替え）。
+      // Google経由は「直近7日」に絞って取り、0件なら通常検索に落とす
+      fetchKeyword(k).then(function(items){
         items.sort(function(a, b){ return b.date - a.date; });
         items = items.slice(0, PER_KW);
         // 表示できた記事は、その場で「見た記事（見出し）」に記録する。
