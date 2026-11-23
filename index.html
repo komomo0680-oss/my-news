@@ -141,6 +141,14 @@
     catch(e){ return []; }
   }
   function storeSeenLinks(list){ try { localStorage.setItem(LS_LINKS, JSON.stringify(list)); } catch(e){} }
+  // 見出しの比べ方をそろえる：取得元（Bing／Google／rss2json）で末尾の「 - 媒体名」や空白の付き方が
+  // 変わり、同じ記事でも別物に見えて●新着が付き直すのを防ぐ（2026-11-23）
+  function normTitle(t){
+    var x = String(t || "");
+    var i = x.lastIndexOf(" - ");
+    if (i > 0) x = x.slice(0, i);
+    return x.replace(/\s+/g, "").toLowerCase();
+  }
   function todayStr(){
     var n = new Date();
     return n.getFullYear() + "-" + ("0" + (n.getMonth() + 1)).slice(-2) + "-" + ("0" + n.getDate()).slice(-2);
@@ -484,7 +492,7 @@
     // 新着判定は「その日の最初に開いたときに無かった記事」で行う（見出しを覚える方式。基準は日付が変わるまで固定）
     var prevLinks = loadBaselineLinks();
     var prevSet = {};
-    prevLinks.forEach(function(u){ prevSet[u] = 1; });
+    prevLinks.forEach(function(u){ prevSet[normTitle(u)] = 1; });
     // 旧版のデータ（リンク）が残っている最初の1回だけは新着を付けず、今回の記事で基準を作り直す
     var legacyKeys = prevLinks.some(function(u){ return /^https?:\/\//.test(u); });
     if (!kws.length){
@@ -509,13 +517,16 @@
         // 表示できた記事は、その場で「見た記事（見出し）」に記録する。
         // 途中で閉じても記録が残り、翌日の基準が欠けないようにするため
         var seenNow = loadSeenLinks();
-        items.forEach(function(it){ if (seenNow.indexOf(it.title) < 0) seenNow.push(it.title); });
+        items.forEach(function(it){
+          var nt = normTitle(it.title);
+          if (!seenNow.some(function(x){ return normTitle(x) === nt; })) seenNow.push(nt);
+        });
         storeSeenLinks(seenNow.slice(-300));
         var body = document.getElementById("kw-body-" + i);
         if (!body) return;
         if (!items.length){ body.textContent = "新着が見つかりませんでした"; return; }
         var html = '<ul class="items" id="kw-list-' + i + '">' + items.map(function(it){
-          var isNew = !legacyKeys && !prevSet[it.title];
+          var isNew = !legacyKeys && !prevSet[normTitle(it.title)] && !!it.date && (Date.now() - it.date < 48 * 60 * 60 * 1000);
           var idx = currentItems.length;
           currentItems.push({title: it.title, link: it.link, source: it.source, date: it.date, kw: k});
           var saved = isSaved(it.link);
