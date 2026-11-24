@@ -246,10 +246,14 @@
     // そのまま→空白を除いた形→最初の単語だけ、の順に試し、いちばん新しい結果を返す。
     // 48時間以内の結果が取れたら、そこで打ち切る。
     var forms = [k];
-    var joined = String(k).replace(/\s+/g, "");
-    if (joined && joined !== k) forms.push(joined);
-    var first = String(k).trim().split(/\s+/)[0];
-    if (first && forms.indexOf(first) < 0) forms.push(first);
+    // 「-単語」の除外指定があるときは形を変えない（つなげると「猫-犬」のような別の言葉になり、
+    // 最初の単語だけにすると除外が消えてしまうため）
+    if (!/(^|\s)-/.test(k)){
+      var joined = String(k).replace(/\s+/g, "");
+      if (joined && joined !== k) forms.push(joined);
+      var first = String(k).trim().split(/\s+/)[0];
+      if (first && forms.indexOf(first) < 0) forms.push(first);
+    }
     var best = null;
     var chain = Promise.resolve();
     forms.forEach(function(f){
