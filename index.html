@@ -100,7 +100,7 @@
   </div>
 </main>
 <footer>
-  <p class="note">ニュースはGoogleニュースから取得しています。記事の見出しをタップすると元の記事が開きます。</p>
+  <p class="note">ニュースはBingニュース／Googleニュースから取得しています。記事の見出しをタップすると元の記事が開きます。</p>
 </footer>
 <script>
 (function(){
@@ -119,13 +119,9 @@
   // 自前中継（Cloudflare Worker）。Googleニュースは中継経由では取れない（503でブロックされる）ため、Bing専用に使う。
   var RELAY = "https://mynews-relay.komomo0680.workers.dev/";
   var BING_NEWS = "https://www.bing.com/news/search?format=RSS&mkt=ja-JP&q=";
-  // Bingの方が新しいキーワードだけ、Bingから取る（2026-11-19実測）。判定は空白を除いたキーワードに言葉が含まれるかで見る。
-  // ここに無いキーワードは今まで通りGoogleから取る。
-  var BING_KEYS = ["化粧品", "大阪イルミネーション", "お出かけ", "ダイエット", "投信"];
-  function routeIsBing(k){
-    var flat = String(k).replace(/\s+/g, "");
-    return BING_KEYS.some(function(b){ return flat.indexOf(b) >= 0; });
-  }
+  // 2026-11-24：Google経由の無料中継（allorigins／rss2json）が両方とも応答なし・制限で
+  // 使えなくなったため、全キーワードでまずBing（自前中継経由）を試し、
+  // 取れない・古い場合だけGoogle経由に切り替える方式に変更した。
 
   function loadKeywords(){
     try { var v = JSON.parse(localStorage.getItem(LS_KW) || "[]"); return Array.isArray(v) ? v : []; }
@@ -240,27 +236,38 @@
   }
 
   function fetchViaBing(k){
-    var target = BING_NEWS + encodeURIComponent(k);
-    var u = RELAY + "?url=" + encodeURIComponent(target) + "&k=komomo-relay";
-    return fetchWithTimeout(u, 12000).then(parseXmlItems).then(function(items){
-      if (!items.length) throw new Error("empty");
-      return items;
+    function once(q){
+      var target = BING_NEWS + encodeURIComponent(q);
+      var u = RELAY + "?url=" + encodeURIComponent(target) + "&k=komomo-relay";
+      return fetchWithTimeout(u, 12000).then(parseXmlItems);
+    }
+    return once(k).then(function(items){
+      if (items.length) return items;
+      // Bingはスペース入りの言葉で0件になることがある（例：「大阪 イルミネーション」→0件、
+      // つなげた「大阪イルミネーション」→11件。2026-11-24実測）。0件なら空白を除いて取り直す。
+      var joined = String(k).replace(/\s+/g, "");
+      if (joined && joined !== k) return once(joined).then(function(items2){
+        if (!items2.length) throw new Error("empty");
+        return items2;
+      });
+      throw new Error("empty");
     });
   }
 
   function fetchKeyword(k){
-    // Bing担当のキーワードは先にBing（自前中継経由）を試し、最新記事が48時間以内ならそれを使う。
-    // 取れない・古い・0件の場合は今まで通りのGoogle経由に切り替えるので、表示が止まることはない。
+    // 全キーワード共通：まずBing（自前中継経由）を試し、最新記事が48時間以内ならそれを使う。
+    // 取れない・0件・古い場合はGoogle経由を試し、それもダメならBingの結果（古くても）を返す。
     function googleChain(){
       return fetchFeed(GNEWS + encodeURIComponent(k + " when:7d")).then(function(items){
         if (!items.length) return fetchFeed(GNEWS + encodeURIComponent(k));
         return items;
       });
     }
-    if (!routeIsBing(k)) return googleChain();
     return fetchViaBing(k).then(function(items){
       if (Date.now() - newestTime(items) < 48 * 60 * 60 * 1000) return items;
-      return googleChain();
+      return googleChain().then(function(g){
+        return g && g.length ? g : items;
+      }, function(){ return items; });
     }, function(){ return googleChain(); });
   }
 
@@ -287,6 +294,11 @@
   }
   function resolvePublisherUrl(url){
     try {
+      // Bingのリンクは中継（apiclick）形式で、本当の記事URLが url= の中に入っている
+      if (url.indexOf("bing.com/news/apiclick") >= 0){
+        var bm = url.match(/[?&]url=([^&]+)/);
+        if (bm) return decodeURIComponent(bm[1]);
+      }
       var m = url.match(/news\.google\.com\/rss\/articles\/([A-Za-z0-9_-]+)/);
       if (!m) return url;
       var bin = atob(m[1].replace(/-/g, "+").replace(/_/g, "/"));
@@ -305,16 +317,24 @@
   }
   function fetchArticleText(url){
     var target = resolvePublisherUrl(url);
-    var jina = "https://r.jina.ai/" + target;
-    return fetchWithTimeout(jina, 25000).then(cleanJinaText).then(function(t){
+    // 第一経路は自前中継（Cloudflare Worker）で記事ページを取り、本文を抜く。
+    // 外部の本文化サービス（jina）は制限（429）で不安定になったため予備に回した（2026-11-24）。
+    var relayUrl = RELAY + "?url=" + encodeURIComponent(target) + "&k=komomo-relay";
+    return fetchWithTimeout(relayUrl, 20000).then(extractText).then(function(t){
       if (!t || t.length < 200) throw new Error("short");
       return t;
     }).catch(function(){
+      var jina = "https://r.jina.ai/" + target;
+      return fetchWithTimeout(jina, 25000).then(cleanJinaText).then(function(t){
+        if (!t || t.length < 200) throw new Error("short");
+        return t;
+      });
+    }).catch(function(){
       var u1 = "https://api.allorigins.win/raw?url=" + encodeURIComponent(target);
-      return fetchWithTimeout(u1, 15000).then(extractText);
-    }).then(function(t){
-      if (!t || t.length < 200) throw new Error("short");
-      return t;
+      return fetchWithTimeout(u1, 15000).then(extractText).then(function(t){
+        if (!t || t.length < 200) throw new Error("short");
+        return t;
+      });
     }).catch(function(){
       var u2 = "https://corsproxy.io/?url=" + encodeURIComponent(target);
       return fetchWithTimeout(u2, 15000).then(extractText).then(function(t){
