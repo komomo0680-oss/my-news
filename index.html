@@ -270,16 +270,28 @@
     });
   }
 
+  function normalizeQuery(k){
+    // 除外指定の書き方ゆれを直す：全角空白→半角空白、全角の「－」→半角の「-」、
+    // 「- 単語」（-の後に空白）→「-単語」にくっつける。
+    // ゆれたままだと除外にならず、かえってその単語が必須になって、その記事だらけになる（2026-11-24）
+    var q = String(k).replace(/　/g, " ");
+    q = q.replace(/[－‐]/g, "-");
+    q = q.replace(/-\s+/g, "-");
+    return q.replace(/\s+/g, " ").trim();
+  }
+
   function fetchKeyword(k){
     // 全キーワード共通：まずBing（自前中継経由）を試し、最新記事が48時間以内ならそれを使う。
     // 取れない・0件・古い場合はGoogle経由を試し、それもダメならBingの結果（古くても）を返す。
+    // 検索に使う言葉は normalizeQuery で整える（画面の表示名は登録したまま）。
+    var q = normalizeQuery(k);
     function googleChain(){
-      return fetchFeed(GNEWS + encodeURIComponent(k + " when:7d")).then(function(items){
-        if (!items.length) return fetchFeed(GNEWS + encodeURIComponent(k));
+      return fetchFeed(GNEWS + encodeURIComponent(q + " when:7d")).then(function(items){
+        if (!items.length) return fetchFeed(GNEWS + encodeURIComponent(q));
         return items;
       });
     }
-    return fetchViaBing(k).then(function(items){
+    return fetchViaBing(q).then(function(items){
       if (Date.now() - newestTime(items) < 48 * 60 * 60 * 1000) return items;
       // Bingが古いときはGoogle経由も試し、より新しい方を表示する
       return googleChain().then(function(g){
