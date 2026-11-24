@@ -195,7 +195,7 @@
 
   function fetchViaRaw(rss){
     var u = "https://api.allorigins.win/raw?url=" + encodeURIComponent(rss);
-    return fetchWithTimeout(u, 12000).then(parseXmlItems).then(function(items){
+    return fetchWithTimeout(u, 7000).then(parseXmlItems).then(function(items){
       if (!items.length) throw new Error("empty");
       return items;
     });
@@ -203,7 +203,7 @@
 
   function fetchViaRss2json(rss){
     var j = "https://api.rss2json.com/v1/api.json?rss_url=" + encodeURIComponent(rss);
-    return fetchWithTimeout(j, 10000).then(function(text){
+    return fetchWithTimeout(j, 6000).then(function(text){
       var data = JSON.parse(text);
       if (!data.items || !data.items.length) throw new Error("empty");
       return data.items.map(function(it){
@@ -241,16 +241,28 @@
       var u = RELAY + "?url=" + encodeURIComponent(target) + "&k=komomo-relay";
       return fetchWithTimeout(u, 12000).then(parseXmlItems);
     }
-    return once(k).then(function(items){
-      if (items.length) return items;
-      // Bingはスペース入りの言葉で0件になることがある（例：「大阪 イルミネーション」→0件、
-      // つなげた「大阪イルミネーション」→11件。2026-11-24実測）。0件なら空白を除いて取り直す。
-      var joined = String(k).replace(/\s+/g, "");
-      if (joined && joined !== k) return once(joined).then(function(items2){
-        if (!items2.length) throw new Error("empty");
-        return items2;
+    // Bingは言葉の形で結果が大きく変わる（2026-11-24実測：「大阪 イルミネーション」0件→
+    // つなげると11件／「ダイエット ストレッチ マッサージ」は最新が1年以上前→「ダイエット」だけなら当日）。
+    // そのまま→空白を除いた形→最初の単語だけ、の順に試し、いちばん新しい結果を返す。
+    // 48時間以内の結果が取れたら、そこで打ち切る。
+    var forms = [k];
+    var joined = String(k).replace(/\s+/g, "");
+    if (joined && joined !== k) forms.push(joined);
+    var first = String(k).trim().split(/\s+/)[0];
+    if (first && forms.indexOf(first) < 0) forms.push(first);
+    var best = null;
+    var chain = Promise.resolve();
+    forms.forEach(function(f){
+      chain = chain.then(function(){
+        if (best && Date.now() - newestTime(best) < 48 * 60 * 60 * 1000) return;
+        return once(f).then(function(items){
+          if (items.length && (!best || newestTime(items) > newestTime(best))) best = items;
+        }, function(){});
       });
-      throw new Error("empty");
+    });
+    return chain.then(function(){
+      if (!best) throw new Error("empty");
+      return best;
     });
   }
 
@@ -265,8 +277,9 @@
     }
     return fetchViaBing(k).then(function(items){
       if (Date.now() - newestTime(items) < 48 * 60 * 60 * 1000) return items;
+      // Bingが古いときはGoogle経由も試し、より新しい方を表示する
       return googleChain().then(function(g){
-        return g && g.length ? g : items;
+        return (g && g.length && newestTime(g) > newestTime(items)) ? g : items;
       }, function(){ return items; });
     }, function(){ return googleChain(); });
   }
