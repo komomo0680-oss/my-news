@@ -100,7 +100,7 @@
   </div>
 </main>
 <footer>
-  <p class="note">ニュースはBingニュース／Googleニュースから取得しています。記事の見出しをタップすると元の記事が開きます。</p>
+  <p class="note">ニュースはBingニュース／Googleニュースから取得しています。記事の見出しをタップすると元の記事が開きます。（版：2026-11-25b）</p>
 </footer>
 <script>
 (function(){
@@ -182,7 +182,8 @@
       var link = n.querySelector("link") ? n.querySelector("link").textContent : "";
       var pub = n.querySelector("pubDate") ? n.querySelector("pubDate").textContent : "";
       var src = n.querySelector("source") ? n.querySelector("source").textContent : "";
-      if (title && link) out.push({title: title, link: link, date: new Date(pub).getTime() || 0, source: src});
+      var desc = n.querySelector("description") ? n.querySelector("description").textContent : "";
+      if (title && link) out.push({title: title, link: link, date: new Date(pub).getTime() || 0, source: src, desc: desc});
     });
     return out;
   }
@@ -210,7 +211,7 @@
         // rss2json の pubDate は UTC なのにタイムゾーン表記がないため、そのまま読むと9時間ずれる
         var ds = String(it.pubDate || "").replace(" ", "T");
         if (ds && !/[Z+]/.test(ds)) ds += "Z";
-        return {title: it.title, link: it.link, date: new Date(ds).getTime() || 0, source: ""};
+        return {title: it.title, link: it.link, date: new Date(ds).getTime() || 0, source: "", desc: String(it.description || "").replace(/<[^>]+>/g, " ")};
       });
     });
   }
@@ -280,6 +281,24 @@
     return q.replace(/\s+/g, " ").trim();
   }
 
+  function applyExclusions(items, q){
+    // 「-単語」の除外は、検索エンジン側が効かせないことがあるため（2026-11-25実測：
+    // Bingは除外すると0件、Google生RSSは除外が効いたり効かなかったりする）、
+    // アプリ側でも見出し＋概要に除外語を含む記事を取り除いて確実に守る。
+    // 全部消えてしまう場合は、見出しだけの判定→元の一覧の順に緩める。
+    var ex = [];
+    String(q).split(/\s+/).forEach(function(tok){
+      if (tok.length > 1 && tok.charAt(0) === "-") ex.push(tok.slice(1));
+    });
+    if (!ex.length || !items || !items.length) return items;
+    function hasEx(s){ s = String(s || ""); return ex.some(function(w){ return s.indexOf(w) >= 0; }); }
+    var strict = items.filter(function(it){ return !hasEx(it.title) && !hasEx(it.desc); });
+    if (strict.length) return strict;
+    var titleOnly = items.filter(function(it){ return !hasEx(it.title); });
+    if (titleOnly.length) return titleOnly;
+    return items;
+  }
+
   function fetchKeyword(k){
     // 全キーワード共通：まずBing（自前中継経由）を試し、最新記事が48時間以内ならそれを使う。
     // 取れない・0件・古い場合はGoogle経由を試し、それもダメならBingの結果（古くても）を返す。
@@ -297,7 +316,10 @@
       return googleChain().then(function(g){
         return (g && g.length && newestTime(g) > newestTime(items)) ? g : items;
       }, function(){ return items; });
-    }, function(){ return googleChain(); });
+    }, function(){ return googleChain(); }).then(function(items){
+      // どの経路の結果でも、最後にアプリ側で除外指定を効かせる
+      return applyExclusions(items, q);
+    });
   }
 
   function loadSaved(){
