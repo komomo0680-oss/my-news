@@ -100,7 +100,7 @@
   </div>
 </main>
 <footer>
-  <p class="note">ニュースはBingニュース／Googleニュースから取得しています。記事の見出しをタップすると元の記事が開きます。（版：2026-11-25b）</p>
+  <p class="note">ニュースはBingニュース／Googleニュースから取得しています。記事の見出しをタップすると元の記事が開きます。（版：2026-11-25c）</p>
 </footer>
 <script>
 (function(){
@@ -299,6 +299,16 @@
     return items;
   }
 
+  function applyFreshCap(items){
+    // ニュースアプリなので、45日より古い記事は出さない（2026-11-25：Bingが春の
+    // ゴールデンウィーク記事など数か月前のものを返すことがあるため）。
+    // 全件古い場合は元の一覧をそのまま返す（0件にはしない）。
+    if (!items || !items.length) return items;
+    var cutoff = Date.now() - 45 * 24 * 60 * 60 * 1000;
+    var fresh = items.filter(function(it){ return !it.date || it.date >= cutoff; });
+    return fresh.length ? fresh : items;
+  }
+
   function fetchKeyword(k){
     // 全キーワード共通：まずBing（自前中継経由）を試し、最新記事が48時間以内ならそれを使う。
     // 取れない・0件・古い場合はGoogle経由を試し、それもダメならBingの結果（古くても）を返す。
@@ -310,15 +320,25 @@
         return items;
       });
     }
-    return fetchViaBing(q).then(function(items){
-      if (Date.now() - newestTime(items) < 48 * 60 * 60 * 1000) return items;
-      // Bingが古いときはGoogle経由も試し、より新しい方を表示する
-      return googleChain().then(function(g){
-        return (g && g.length && newestTime(g) > newestTime(items)) ? g : items;
-      }, function(){ return items; });
-    }, function(){ return googleChain(); }).then(function(items){
-      // どの経路の結果でも、最後にアプリ側で除外指定を効かせる
-      return applyExclusions(items, q);
+    function bingThenGoogle(){
+      return fetchViaBing(q).then(function(items){
+        if (Date.now() - newestTime(items) < 48 * 60 * 60 * 1000) return items;
+        // Bingが古いときはGoogle経由も試し、より新しい方を表示する
+        return googleChain().then(function(g){
+          return (g && g.length && newestTime(g) > newestTime(items)) ? g : items;
+        }, function(){ return items; });
+      }, function(){ return googleChain(); });
+    }
+    // 除外指定（-単語）があるときはGoogle経由を先に試す。Bingは除外を付けると
+    // 0件か、除外を無視して古い記事を返すことがあり、Google側の除外が一番素直に効く
+    // （2026-11-25実測：「近畿 お出かけ -天気」で観光記事だけが返った）。
+    var hasExcl = /(^|\s)-/.test(q);
+    var main = hasExcl
+      ? googleChain().then(function(g){ if (g && g.length) return g; throw new Error("empty"); }, function(){ throw new Error("fail"); }).then(null, function(){ return bingThenGoogle(); })
+      : bingThenGoogle();
+    return main.then(function(items){
+      // どの経路の結果でも、最後にアプリ側で除外指定と古さの上限を効かせる
+      return applyExclusions(applyFreshCap(items), q);
     });
   }
 
